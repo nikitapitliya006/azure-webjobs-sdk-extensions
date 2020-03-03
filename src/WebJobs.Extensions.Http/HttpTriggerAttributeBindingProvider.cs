@@ -138,24 +138,34 @@ namespace Microsoft.Azure.WebJobs.Extensions.Http
                 }
 
                 IValueProvider valueProvider = null;
-                object poco = null;
-                IReadOnlyDictionary<string, object> userTypeBindingData = null;
                 string invokeString = ToInvokeString(request);
                 if (_isUserTypeBinding)
                 {
                     valueProvider = await CreateUserTypeValueProvider(request, invokeString);
-                    if (_bindingDataProvider != null)
-                    {
-                        // some binding data is defined by the user type
-                        // the provider might be null if the Type is invalid, or if the Type
-                        // has no public properties to bind to
-                        poco = await valueProvider.GetValueAsync();
-                        userTypeBindingData = _bindingDataProvider.GetBindingData(poco);
-                    }
                 }
                 else
                 {
                     valueProvider = new HttpRequestValueBinder(_parameter, request, invokeString);
+                }
+
+                var bindingData = await GetBindingDataAsync(request, valueProvider);
+                return new TriggerData(valueProvider, bindingData) 
+                { 
+                    ReturnValueProvider = new ResponseHandler(request, _responseHook)
+                };
+            }
+
+            private async Task<IReadOnlyDictionary<string, object>> GetBindingDataAsync(HttpRequest request, IValueProvider valueProvider)
+            {
+                object poco = null;
+                IReadOnlyDictionary<string, object> userTypeBindingData = null;
+                if (_bindingDataProvider != null)
+                {
+                    // some binding data is defined by the user type
+                    // the provider might be null if the Type is invalid, or if the Type
+                    // has no public properties to bind to
+                    poco = await valueProvider.GetValueAsync();
+                    userTypeBindingData = _bindingDataProvider.GetBindingData(poco);
                 }
 
                 // create a modifiable collection of binding data and
@@ -175,8 +185,7 @@ namespace Microsoft.Azure.WebJobs.Extensions.Http
                     ApplyBindingData(poco, aggregateBindingData);
                 }
 
-                IValueBinder returnProvider = new ResponseHandler(request, _responseHook);
-                return new TriggerData(valueProvider, aggregateBindingData) { ReturnValueProvider = returnProvider };
+                return aggregateBindingData;
             }
 
             public static string ToInvokeString(HttpRequest request)
@@ -290,8 +299,11 @@ namespace Microsoft.Azure.WebJobs.Extensions.Http
                 var bindingData = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
                 if (request.ContentLength != null && request.ContentLength > 0)
                 {
-                    string body = await request.ReadAsStringAsync();
-                    Utility.ApplyBindingData(body, bindingData);
+                    if (string.IsNullOrEmpty(request.ContentType) || string.Equals(request.ContentType, "application/json", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string body = await request.ReadAsStringAsync();
+                        Utility.ApplyBindingData(body, bindingData);
+                    }
                 }
 
                 // apply binding data from the query string
